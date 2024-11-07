@@ -1,6 +1,8 @@
 import cv2
 import mediapipe as mp
 import pyautogui
+import threading
+import time
 
 # Inicjalizacja mediapipe
 mp_hands = mp.solutions.hands.Hands()
@@ -22,12 +24,20 @@ last_cursor_x, last_cursor_y = pyautogui.position()
 # Parametr wygładzania ruchu
 smooth_factor = 0.2
 
-# Zmienne do śledzenia stanu uszczypnięcia
+# Zmienna do śledzenia stanu uszczypnięcia
 is_left_pinching = False
 is_right_pinching = False
 
-try:
-    # Pętla główna
+# Zmienna do blokowania dostępu do sterowania kursorem
+cursor_lock = threading.Lock()
+
+# Zmienna do śledzenia aktywnej dłoni
+active_hand_id = None
+
+# Funkcja do przetwarzania obrazu i sterowania kursorem
+def process_frame():
+    global last_cursor_x, last_cursor_y, is_left_pinching, is_right_pinching, active_hand_id
+
     while True:
         # Odczytanie klatki z kamery
         success, image = cap.read()
@@ -40,50 +50,57 @@ try:
 
         # Jeśli wykryto dłonie, przetwarzaj współrzędne
         if results_hands.multi_hand_landmarks:
+            # Znajdź pierwszą wykrytą dłoń
             for hand_landmarks in results_hands.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(image, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS)
+                # Jeśli nie ma aktywnej dłoni, ustaw ją na aktualną
+                if active_hand_id is None:
+                    active_hand_id = hand_landmarks.handness.classification[0].index
 
-                # Pobranie współrzędnych palca wskazującego, środkowego i kciuka
-                cam_width, cam_height = image.shape[1], image.shape[0]
-                index_finger_tip_x = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP].x * cam_width)
-                index_finger_tip_y = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP].y * cam_height)
-                middle_finger_tip_x = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP].x * cam_width)
-                middle_finger_tip_y = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP].y * cam_height)
-                thumb_tip_x = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.THUMB_TIP].x * cam_width)
-                thumb_tip_y = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.THUMB_TIP].y * cam_height)
+                # Jeśli aktualna dłoń to aktywna dłoń, przetwarzaj jej dane
+                if hand_landmarks.handness.classification[0].index == active_hand_id:
+                    mp_drawing.draw_landmarks(image, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS)
 
-                # Obliczenie odległości między palcem wskazującym a kciukiem
-                left_distance = ((index_finger_tip_x - thumb_tip_x) ** 2 + (index_finger_tip_y - thumb_tip_y) ** 2) ** 0.5
+                    # Pobranie współrzędnych palca wskazującego, środkowego i kciuka
+                    cam_width, cam_height = image.shape[1], image.shape[0]
+                    index_finger_tip_x = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP].x * cam_width)
+                    index_finger_tip_y = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.INDEX_FINGER_TIP].y * cam_height)
+                    middle_finger_tip_x = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP].x * cam_width)
+                    middle_finger_tip_y = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.MIDDLE_FINGER_TIP].y * cam_height)
+                    thumb_tip_x = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.THUMB_TIP].x * cam_width)
+                    thumb_tip_y = int(hand_landmarks.landmark[mp.solutions.hands.HandLandmark.THUMB_TIP].y * cam_height)
 
-                # Obliczenie odległości między palcem środkowym a kciukiem
-                right_distance = ((middle_finger_tip_x - thumb_tip_x) ** 2 + (middle_finger_tip_y - thumb_tip_y) ** 2) ** 0.5
+                    # Obliczenie odległości między palcem wskazującym a kciukiem
+                    left_distance = ((index_finger_tip_x - thumb_tip_x) ** 2 + (index_finger_tip_y - thumb_tip_y) ** 2) ** 0.5
 
-                # Sprawdzenie, czy palce są blisko siebie (uszczypnięcie)
-                if left_distance < 50:
-                    is_left_pinching = True
-                    pyautogui.click(button='left')
-                else:
-                    is_left_pinching = False
+                    # Obliczenie odległości między palcem środkowym a kciukiem
+                    right_distance = ((middle_finger_tip_x - thumb_tip_x) ** 2 + (middle_finger_tip_y - thumb_tip_y) ** 2) ** 0.5
 
-                if right_distance < 50:
-                    is_right_pinching = True
-                    pyautogui.click(button='right')
-                else:
-                    is_right_pinching = False
+                    # Sprawdzenie, czy palce są blisko siebie (uszczypnięcie)
+                    if left_distance < 50:
+                        is_left_pinching = True
+                        pyautogui.click(button='left')
+                    else:
+                        is_left_pinching = False
 
-                # Przeskalowanie współrzędnych dłoni do rozdzielczości ekranu
-                screen_x = screen_width - int(index_finger_tip_x * screen_width / cam_width)
-                screen_y = int(index_finger_tip_y * screen_height / cam_height)
+                    if right_distance < 50:
+                        is_right_pinching = True
+                        pyautogui.click(button='right')
+                    else:
+                        is_right_pinching = False
 
-                # Wygładzanie ruchu
-                smoothed_x = last_cursor_x + smooth_factor * (screen_x - last_cursor_x)
-                smoothed_y = last_cursor_y + smooth_factor * (screen_y - last_cursor_y)
+                    # Przeskalowanie współrzędnych dłoni do rozdzielczości ekranu
+                    screen_x = screen_width - int(index_finger_tip_x * screen_width / cam_width)
+                    screen_y = int(index_finger_tip_y * screen_height / cam_height)
 
-                # Przesunięcie kursora
-                pyautogui.moveTo(smoothed_x, smoothed_y, duration=0.01)
+                    # Wygładzanie ruchu
+                    smoothed_x = last_cursor_x + smooth_factor * (screen_x - last_cursor_x)
+                    smoothed_y = last_cursor_y + smooth_factor * (screen_y - last_cursor_y)
 
-                # Zaktualizuj ostatnią pozycję kursora
-                last_cursor_x, last_cursor_y = smoothed_x, smoothed_y
+                    # Przesunięcie kursora
+                    pyautogui.moveTo(smoothed_x, smoothed_y, duration=0.01)
+
+                    # Zaktualizuj ostatnią pozycję kursora
+                    last_cursor_x, last_cursor_y = smoothed_x, smoothed_y
 
         # Wyświetlenie obrazu
         cv2.imshow('Sterowanie kursorem', image)
@@ -92,7 +109,40 @@ try:
         if cv2.waitKey(1) == ord('q'):
             break
 
-finally:
-    # Zamknięcie kamery i okna
-    cap.release()
-    cv2.destroyAllWindows()
+# Funkcja do obsługi sterowania kursorem
+def control_cursor():
+    global last_cursor_x, last_cursor_y, is_left_pinching, is_right_pinching
+
+    while True:
+        # Pobranie blokady
+        with cursor_lock:
+            # Przesunięcie kursora
+            pyautogui.moveTo(last_cursor_x, last_cursor_y, duration=0.01)
+
+            # Kliknięcie lewym przyciskiem myszy
+            if is_left_pinching:
+                pyautogui.click(button='left')
+
+            # Kliknięcie prawym przyciskiem myszy
+            if is_right_pinching:
+                pyautogui.click(button='right')
+
+        # Czekanie na następny cykl
+        time.sleep(0.01)
+
+# Uruchomienie wątku do przetwarzania obrazu
+processing_thread = threading.Thread(target=process_frame)
+processing_thread.start()
+
+# Uruchomienie wątku do obsługi sterowania kursorem
+control_thread = threading.Thread(target=control_cursor)
+control_thread.start()
+
+# Zakończenie pętli, jeśli naciśnięto klawisz 'q'
+while True:
+    if cv2.waitKey(1) == ord('q'):
+        break
+
+# Zamknięcie kamery i okna
+cap.release()
+cv2.destroyAllWindows()
